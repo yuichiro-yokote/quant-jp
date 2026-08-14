@@ -1,0 +1,2 @@
+symbol,start,end,price_factor,volume_factor,reason,verified_against,verified_on
+1306.T,2026-03-30,2026-03-31,10,0.1,yfinanceがこの2日だけ価格を1/10・出来高を10倍で配信。分割ではない(Stock Splits=0/分割履歴も空)。他の日はJ-Quantsと完全一致,J-Quants get_eq_bars_daily(code=1306) AdjO/AdjH/AdjL/AdjC,2026-08-15

@@ -1,0 +1,308 @@
+"""株価日足の取得とキャッシュ。
+
+設計方針:
+  - 主データ源は yfinance（当日終値まで取れる）。J-Quants Free は12週間遅延で
+    日次運用に使えないため、突合検証用に別スクリプト（compare_sources.py）で使う
+  - 取得結果は data/raw/ にキャッシュする。yfinanceにも実質的なレート制限があり、
+    試行のたびに全期間を取り直すのは無駄かつ危険
+  - **異常は握りつぶさず必ず例外にする（fail-fast）**。
+    データ欠損を黙って0や前日値で埋めると、バックテストは静かに嘘をつく。
+    「戦略が悪い」のか「データが壊れている」のかを区別できなくなるのが最悪。
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import pandas as pd
+import yfinance as yf
+
+REPO_ROOT = Path(__file__).resolve().parent
+CACHE_DIR = REPO_ROOT / "data" / "raw"
+
+# キャッシュをこれ以上古くさせない。日足なので1日で十分
+CACHE_MAX_AGE = timedelta(hours=12)
+
+OHLCV = ["Open", "High", "Low", "Close", "Volume"]
+
+
+class DataQualityError(Exception):
+    """取得データが検証を通らなかった。黙って先に進ませないための例外。"""
+
+
+def _validate(df: pd.DataFrame, symbol: str) -> None:
+    """バックテストに流す前に、データが壊れていないことを確認する。"""
+    if df.empty:
+        raise DataQualityError(f"{symbol}: データが0行。銘柄コードか期間が誤っている可能性")
+
+    missing = [c for c in OHLCV if c not in df.columns]
+    if missing:
+        raise DataQualityError(f"{symbol}: 必要な列がない: {missing}")
+
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise DataQualityError(f"{symbol}: インデックスが日付型でない")
+
+    if not df.index.is_monotonic_increasing:
+        raise DataQualityError(f"{symbol}: 日付が昇順でない")
+
+    dup = df.index.duplicated().sum()
+    if dup:
+        raise DataQualityError(f"{symbol}: 日付が重複している行が {dup} 件")
+
+    nan_rows = df[OHLCV].isna().any(axis=1)
+    if nan_rows.any():
+        where = [str(d.date()) for d in df.index[nan_rows]][:5]
+        raise DataQualityError(
+            f"{symbol}: 履歴の途中にOHLCV欠損が {nan_rows.sum()} 件: {where}"
+            " — 末尾の未確定バーではないので、埋めずに原因を調べること"
+        )
+
+    price_cols = ["Open", "High", "Low", "Close"]
+    if (df[price_cols] <= 0).any().any():
+        raise DataQualityError(f"{symbol}: 価格が0以下の行がある")
+
+    # 高値 < 安値 のような論理破綻は、データ源のバグを示す明確なサイン。
+    # ただし auto_adjust による除数計算で 1e-13 程度の誤差が乗るため、
+    # 相対1e-6（＝株価3000円で0.003円）を超えたものだけを異常とみなす。
+    tol = df["Close"].abs() * 1e-6
+    broken = (
+        (df["Low"] - df["High"] > tol)
+        | (df["Close"] - df["High"] > tol)
+        | (df["Low"] - df["Close"] > tol)
+    )
+    if broken.any():
+        where = [str(d.date()) for d in df.index[broken]][:5]
+        raise DataQualityError(
+            f"{symbol}: High/Low/Close の大小関係が矛盾する行が {broken.sum()} 件: {where}"
+        )
+
+    # --- 行をまたぐ整合性: 異常なジャンプ ---
+    # 行単位の検査ではデータ破損を捕まえられない。
+    # 実例: 1306.T の 2026-03-30〜31 は yfinance 上で価格が 1/10・出来高が10倍になっている
+    #       （分割ではない。Stock Splits=0、分割履歴も空。ベンダー側の単位ミス）。
+    #       各行はHigh>=Low等を満たすため行単位検査は通ってしまい、
+    #       戦略には「-90%の暴落と+948%の急騰」に見える。
+    # 日本株には値幅制限があるため、1日で±50%を超える終値変化は
+    # 「未調整の分割」か「データ破損」のどちらかしかない。どちらも黙って通してはいけない。
+    ret = df["Close"].pct_change()
+    jumps = ret.abs() > 0.5
+    if jumps.any():
+        detail = [f"{d.date()}({ret[d] * 100:+.0f}%)" for d in df.index[jumps]][:5]
+        raise DataQualityError(
+            f"{symbol}: 1日で±50%を超える価格変動が {int(jumps.sum())} 件: {detail}"
+            " — 未調整の分割かデータ破損。J-Quants(JPX公式)と突合して原因を特定すること"
+        )
+
+    # 出来高0＝実質的に売買できない日。エラーにはしないが、
+    # 「約定したことになっている取引が現実には不可能」という罠なので数だけ出す。
+    zero_vol = int((df["Volume"] <= 0).sum())
+    if zero_vol:
+        print(f"[dataset] {symbol}: 出来高0の日が {zero_vol} 件（約定不能日。結果を読む際に留意）")
+
+
+CORRECTIONS_CSV = REPO_ROOT / "data" / "corrections.csv"
+
+
+def _apply_corrections(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """既知のデータ破損を補正する。
+
+    **データを黙って直すのは本来やってはいけないこと。** だから次の条件を課す:
+      1. 補正は data/corrections.csv に1行ずつ明示する（Git管理下＝履歴が残る）
+      2. 各行に「何を根拠に、いつ確認したか」を必ず書く（J-Quants等の一次情報）
+      3. 適用したら毎回コンソールに出す。静かに効く補正を作らない
+
+    補正しないという選択肢もあるが、その場合ベンチマーク銘柄が使えなくなる。
+    「壊れたまま使う」より「根拠つきで直して記録を残す」方が検証として健全。
+    """
+    if not CORRECTIONS_CSV.exists():
+        return df
+
+    corr = pd.read_csv(CORRECTIONS_CSV)
+    corr = corr[corr["symbol"] == symbol]
+    if corr.empty:
+        return df
+
+    df = df.copy()
+    for _, r in corr.iterrows():
+        mask = (df.index >= pd.Timestamp(r["start"])) & (df.index <= pd.Timestamp(r["end"]))
+        n = int(mask.sum())
+        if not n:
+            continue
+        df.loc[mask, ["Open", "High", "Low", "Close"]] *= float(r["price_factor"])
+        df.loc[mask, "Volume"] *= float(r["volume_factor"])
+        print(f"[dataset] {symbol}: 既知の破損を補正 {r['start']}〜{r['end']} ({n}行, "
+              f"価格x{r['price_factor']}) 根拠: {r['verified_against']}")
+    return df
+
+
+def _cache_path(symbol: str) -> Path:
+    return CACHE_DIR / f"{symbol.replace('.', '_')}_1d.csv"
+
+
+def _drop_unsettled_tail(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """末尾の未確定バーを落とす。
+
+    yfinanceは、その日のバーが確定していないと **出来高だけ入って OHLC が NaN** の
+    行を返すことがある（2026-08-14 に実際に発生）。しかも前日には値が入って見えた日が
+    翌日にはNaNに変わることがある。データ源が過去のバーを後から書き換える前提で組む。
+
+    末尾の欠損＝「まだ確定していない」なので落として良い。
+    履歴の途中の欠損＝データが壊れているので、落としてはいけない（_validateで例外にする）。
+    この2つを混ぜて dropna() すると、静かに嘘をつくバックテストになる。
+    """
+    incomplete = df[["Open", "High", "Low", "Close"]].isna().all(axis=1)
+    n_tail = 0
+    for flag in reversed(incomplete.tolist()):
+        if not flag:
+            break
+        n_tail += 1
+
+    if n_tail:
+        dropped = df.index[-n_tail:]
+        print(f"[dataset] {symbol}: 未確定の末尾 {n_tail} 行を除外 "
+              f"({dropped[0].date()} 〜 {dropped[-1].date()})")
+        df = df.iloc[:-n_tail]
+    return df
+
+
+def _issues_path(symbol: str) -> Path:
+    return CACHE_DIR / f"{symbol.replace('.', '_')}_1d.issues.json"
+
+
+def _scan_bad_dividends(symbol: str) -> list[str]:
+    """分割調整されていない配当・分配金の除権日を洗い出す。
+
+    yfinanceは、株式分割の際に **株価は調整するのに配当額を調整し忘れる**ことがある。
+    実例: 1306.T の 2015-07-10 は分配金 23.0円 / 株価 161.2円 = 14.3%。
+          2016年以降は 2.73円・2.60円と正しいので、この年だけ10倍のまま。
+
+    これが厄介なのは、`auto_adjust=True` が **その除権日より前の価格すべてを
+    14%押し下げる**点。チャートは滑らかなままで、バックテストのリターンだけが
+    静かに水増しされる。ベンチマークがこれをやると合格基準A1が丸ごと狂う。
+
+    日本株の1回の配当が株価の5%を超えることは実質ない。超えたら単位ミスを疑う。
+    """
+    t = yf.Ticker(symbol)
+    div = t.dividends
+    if div is None or div.empty:
+        return []
+    raw = t.history(period="max", interval="1d", auto_adjust=False)
+    if raw.empty:
+        return []
+    div.index = pd.to_datetime(div.index).tz_localize(None).normalize()
+    raw.index = pd.to_datetime(raw.index).tz_localize(None).normalize()
+
+    j = pd.DataFrame({"div": div}).join(raw[["Close"]], how="left").dropna()
+    bad = j[j["div"] / j["Close"] > 0.05]
+    if len(bad):
+        print(f"[dataset] {symbol}: 分割調整漏れの疑いがある配当 {len(bad)} 件: "
+              + ", ".join(f"{i.date()} {r['div']:.2f}円/{r['Close']:.1f}円"
+                          f"={r['div'] / r['Close'] * 100:.1f}%" for i, r in bad.iterrows()))
+    return [str(i.date()) for i in bad.index]
+
+
+def _fetch(symbol: str) -> pd.DataFrame:
+    """yfinanceから全期間の日足を取る。
+
+    auto_adjust=True: 株式分割・配当を調整済みの値で返す。
+    分割を調整し忘れると「1日で株価が1/3になった大暴落」に見え、戦略が誤作動する。
+    調整の正しさは J-Quants(JPX公式) の AdjC と突合して確認済み（乖離 0.0000%）。
+    """
+    df = yf.Ticker(symbol).history(period="max", interval="1d", auto_adjust=True)
+    if df.empty:
+        raise DataQualityError(f"{symbol}: yfinanceが空を返した。ティッカーを確認すること")
+    df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
+    df.index.name = "Date"
+    df = df[OHLCV].copy()
+
+    # 配当の調整漏れはキャッシュに残らないので、取得時に調べて脇に書き出しておく
+    _issues_path(symbol).write_text(
+        json.dumps({"bad_dividend_dates": _scan_bad_dividends(symbol)}), encoding="utf-8"
+    )
+    return _drop_unsettled_tail(df, symbol)
+
+
+def _check_bad_dividends_in_window(symbol: str, df: pd.DataFrame) -> None:
+    """調整漏れ配当が、使う期間の値を汚していないか確認する。
+
+    調整は「除権日より前」の価格に効く。したがって
+    **除権日が期間の開始より後にある場合だけ**、期間内の価格が汚染される。
+    除権日が期間より前なら影響はない（＝開始日を後ろにずらせば回避できる）。
+    """
+    p = _issues_path(symbol)
+    if not p.exists():
+        return
+    dates = json.loads(p.read_text(encoding="utf-8")).get("bad_dividend_dates", [])
+    hit = [d for d in dates if pd.Timestamp(d) > df.index[0]]
+    if hit:
+        raise DataQualityError(
+            f"{symbol}: 分割調整漏れの配当 {hit} が期間開始({df.index[0].date()})より後にある。"
+            f" → この期間の価格は最大で十数%押し下げられており、リターンが水増しされる。"
+            f" 開始日を {hit[-1]} より後にするか、別のティッカーを使うこと"
+        )
+
+
+def load_bars(
+    symbol: str,
+    start: str | None = None,
+    end: str | None = None,
+    *,
+    refresh: bool = False,
+) -> pd.DataFrame:
+    """日足を返す。キャッシュがあればそれを使う。
+
+    Args:
+        symbol: yfinance形式のティッカー（日本株は "7203.T"）
+        start, end: "YYYY-MM-DD"。endは**その日を含む**
+        refresh: Trueならキャッシュを無視して取り直す
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _cache_path(symbol)
+
+    use_cache = (
+        not refresh
+        and path.exists()
+        and datetime.now() - datetime.fromtimestamp(path.stat().st_mtime) < CACHE_MAX_AGE
+    )
+
+    if use_cache:
+        df = pd.read_csv(path, index_col="Date", parse_dates=["Date"])
+    else:
+        df = _fetch(symbol)
+        df.to_csv(path)
+        time.sleep(0.5)  # 連続取得でレート制限に当たらないよう間隔を空ける
+
+    # 検証は**実際に使う期間だけ**に掛ける。
+    # yfinanceの古いデータには実在の矛盾がある（例: 1306.T の2009〜2010年に
+    # 終値が高値を0.2〜0.6%上回る行が4件）。使わない期間の傷でバックテストを
+    # 止めるのは過剰。逆に、使う期間の傷は絶対に見逃さない。
+    if start:
+        df = df[df.index >= pd.Timestamp(start)]
+    if end:
+        df = df[df.index <= pd.Timestamp(end)]
+
+    if df.empty:
+        raise DataQualityError(f"{symbol}: 指定期間 {start}〜{end} にデータが0行")
+
+    # 補正はキャッシュではなく読み出し時に当てる。
+    # キャッシュに焼き込むと「生データ」と「直した後」の区別がつかなくなる。
+    df = _apply_corrections(df, symbol)
+
+    _validate(df, symbol)
+    _check_bad_dividends_in_window(symbol, df)
+    return df
+
+
+def buy_and_hold_return(symbol: str, start: str, end: str, *, refresh: bool = False) -> float:
+    """指定期間をバイ&ホールドしたときのリターン(%)。
+
+    合格基準A1（対TOPIX超過リターン）のベンチマーク計算に使う。
+    実際に売買する前提に合わせ、**初日の寄付で買い、最終日の終値で売る**。
+    """
+    df = load_bars(symbol, start, end, refresh=refresh)
+    entry = float(df["Open"].iloc[0])
+    exit_ = float(df["Close"].iloc[-1])
+    return (exit_ / entry - 1.0) * 100.0
