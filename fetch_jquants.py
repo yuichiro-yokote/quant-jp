@@ -1,7 +1,6 @@
 """J-Quants API (V2) の疎通確認。
 
-事前に環境変数 JQUANTS_API_KEY を設定しておく。
-  PowerShell: $env:JQUANTS_API_KEY = "取得したAPIキー"
+.env に JQUANTS_API_KEY を書いておく（.env.example を参照）。
 """
 
 import os
@@ -9,10 +8,13 @@ import sys
 from datetime import datetime, timedelta
 
 import jquantsapi
+from dotenv import load_dotenv
+
+load_dotenv()
 
 if not os.environ.get("JQUANTS_API_KEY"):
-    print("環境変数 JQUANTS_API_KEY が未設定です。")
-    print('PowerShell で:  $env:JQUANTS_API_KEY = "取得したAPIキー"')
+    print(".env に JQUANTS_API_KEY が設定されていません。")
+    print(".env.example をコピーして .env を作り、APIキーを記入してください。")
     sys.exit(1)
 
 cli = jquantsapi.ClientV2()
