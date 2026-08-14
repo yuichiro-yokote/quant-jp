@@ -139,6 +139,16 @@ def run_one(args) -> None:
     print()
     print("※ これはバックテスト（過去データ）。合格基準A1〜A5の本番は1年フォワードテスト。")
 
+    if args.tearsheet:
+        import tearsheet as ts
+
+        r = ts.equity_to_returns(stats)
+        b = ts.benchmark_returns(BENCHMARK, actual_start, actual_end)
+        ts.explain(r, b)
+        out = ts.REPORTS_DIR / f"trial{trial_id:03d}_{args.strategy}_{args.symbol.replace('.', '_')}.html"
+        ts.build_html(r, b, out, title=f"試行#{trial_id} {args.strategy} {args.symbol}")
+        print(f"\ntear sheet: {out}")
+
     if args.plot:
         out = REPO_ROOT / "reports" / f"trial{trial_id:03d}_{args.symbol.replace('.', '_')}.html"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -160,6 +170,8 @@ def main() -> None:
     p.add_argument("--note", default="")
     p.add_argument("--refresh", action="store_true", help="キャッシュを無視して取り直す")
     p.add_argument("--plot", action="store_true", help="チャートHTMLを出力")
+    p.add_argument("--tearsheet", action="store_true",
+                   help="QuantStatsのtear sheetを出力し、指標を日本語で解説")
     p.add_argument("--trials", action="store_true", help="試行ログの要約だけ表示して終了")
     args = p.parse_args()
 
