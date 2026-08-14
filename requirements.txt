@@ -1,0 +1,20 @@
+# 別PC・GitHub Actions(Linux) で同じ環境を作るための直接依存。
+#   pip install -r requirements.txt
+
+# --- データ取得 ---
+yfinance>=1.6.0
+jquants-api-client>=2.0.0
+python-dotenv>=1.0.0
+
+# yfinance の repair=True がフル履歴の補修に使う（DBSCANでの100倍誤り検出）。
+# yfinance の依存には入っていないため、明示的に入れないと
+# ModuleNotFoundError: No module named 'sklearn' で落ちる。
+scikit-learn>=1.5.0
+
+# --- 検証・評価 ---
+backtesting>=0.6.6
+quantstats>=0.0.81
+matplotlib>=3.9.0
+
+pandas>=2.2.0
+numpy>=2.0.0

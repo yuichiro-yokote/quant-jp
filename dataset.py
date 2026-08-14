@@ -172,18 +172,22 @@ def _issues_path(symbol: str) -> Path:
     return CACHE_DIR / f"{symbol.replace('.', '_')}_1d.issues.json"
 
 
-def _scan_bad_dividends(symbol: str) -> list[str]:
-    """分割調整されていない配当・分配金の除権日を洗い出す。
+def _scan_bad_dividends(symbol: str, adjusted: pd.DataFrame) -> list[str]:
+    """配当の調整が壊れている除権日を洗い出す。
 
     yfinanceは、株式分割の際に **株価は調整するのに配当額を調整し忘れる**ことがある。
-    実例: 1306.T の 2015-07-10 は分配金 23.0円 / 株価 161.2円 = 14.3%。
-          2016年以降は 2.73円・2.60円と正しいので、この年だけ10倍のまま。
+    実例: 1306.T の 2015-07-10 は分配金 23.0円 / 株価 161.2円 = 14.3%（正しくは2.3円）。
 
     これが厄介なのは、`auto_adjust=True` が **その除権日より前の価格すべてを
-    14%押し下げる**点。チャートは滑らかなままで、バックテストのリターンだけが
-    静かに水増しされる。ベンチマークがこれをやると合格基準A1が丸ごと狂う。
+    14%押し下げる**点。チャートは滑らかなままで、リターンだけが静かに水増しされる。
+    ベンチマークがこれをやると合格基準A1が丸ごと狂う。
 
-    日本株の1回の配当が株価の5%を超えることは実質ない。超えたら単位ミスを疑う。
+    判定は2段構え:
+      1. 配当額が株価の5%超 … 日本株で1回の配当がここまで大きいことは実質ない
+      2. **かつ**、調整後の価格系列がその日に大きく飛んでいる
+    調整は「除権日より前」の価格だけに掛かるので、係数が誤っていると
+    除権日ちょうどに段差が出る。逆に言えば、`repair=True` が直せていれば段差は消える。
+    配当メタデータは壊れたままなので、**症状（価格の段差）で判定しないと誤検出になる**。
     """
     t = yf.Ticker(symbol)
     div = t.dividends
@@ -196,12 +200,23 @@ def _scan_bad_dividends(symbol: str) -> list[str]:
     raw.index = pd.to_datetime(raw.index).tz_localize(None).normalize()
 
     j = pd.DataFrame({"div": div}).join(raw[["Close"]], how="left").dropna()
-    bad = j[j["div"] / j["Close"] > 0.05]
-    if len(bad):
-        print(f"[dataset] {symbol}: 分割調整漏れの疑いがある配当 {len(bad)} 件: "
-              + ", ".join(f"{i.date()} {r['div']:.2f}円/{r['Close']:.1f}円"
-                          f"={r['div'] / r['Close'] * 100:.1f}%" for i, r in bad.iterrows()))
-    return [str(i.date()) for i in bad.index]
+    suspect = j[j["div"] / j["Close"] > 0.05]
+    if suspect.empty:
+        return []
+
+    step = adjusted["Close"].pct_change()
+    bad = []
+    for d, r in suspect.iterrows():
+        jump = float(step.get(d, 0.0) or 0.0)
+        if abs(jump) > 0.05:
+            print(f"[dataset] {symbol}: 配当の調整が壊れている {d.date()} "
+                  f"(配当 {r['div']:.2f}円/株価 {r['Close']:.1f}円={r['div'] / r['Close'] * 100:.1f}%, "
+                  f"調整後価格の段差 {jump * 100:+.1f}%)")
+            bad.append(str(d.date()))
+        else:
+            print(f"[dataset] {symbol}: {d.date()} の配当は額が不自然だが、"
+                  f"調整後の価格に段差なし({jump * 100:+.1f}%)。repairで補正済みとみなす")
+    return bad
 
 
 def _fetch(symbol: str) -> pd.DataFrame:
@@ -210,17 +225,27 @@ def _fetch(symbol: str) -> pd.DataFrame:
     auto_adjust=True: 株式分割・配当を調整済みの値で返す。
     分割を調整し忘れると「1日で株価が1/3になった大暴落」に見え、戦略が誤作動する。
     調整の正しさは J-Quants(JPX公式) の AdjC と突合して確認済み（乖離 0.0000%）。
+
+    repair=True: yfinance組み込みの破損補正。実測でわかったこと:
+      - 配当の分割調整漏れは**直せる**（1306.T 2015-07-10 の段差 +15.7% → -0.7%）
+      - 価格が1/10になる破損は**直せない**（repairが見るのは100倍＝通貨単位の誤り）
+        → これは data/corrections.csv で個別に補正する
+      - 正常なデータへの誤検出はなし（J-Quants公式値と突合、修復0行・乖離0.0000%）
+      - フル履歴では **scikit-learn が必要**（ドキュメントに記載のない依存）
     """
-    df = yf.Ticker(symbol).history(period="max", interval="1d", auto_adjust=True)
+    df = yf.Ticker(symbol).history(period="max", interval="1d", auto_adjust=True, repair=True)
     if df.empty:
         raise DataQualityError(f"{symbol}: yfinanceが空を返した。ティッカーを確認すること")
     df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
     df.index.name = "Date"
+    n_repaired = int(df["Repaired?"].sum()) if "Repaired?" in df.columns else 0
+    if n_repaired:
+        print(f"[dataset] {symbol}: yfinanceのrepairが {n_repaired} 行を補正")
     df = df[OHLCV].copy()
 
     # 配当の調整漏れはキャッシュに残らないので、取得時に調べて脇に書き出しておく
     _issues_path(symbol).write_text(
-        json.dumps({"bad_dividend_dates": _scan_bad_dividends(symbol)}), encoding="utf-8"
+        json.dumps({"bad_dividend_dates": _scan_bad_dividends(symbol, df)}), encoding="utf-8"
     )
     return _drop_unsettled_tail(df, symbol)
 
