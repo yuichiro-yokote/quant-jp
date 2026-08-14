@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+
+# 認証情報は絶対にコミットしない
+.env
+*.key
+
+# 取得した生データはキャッシュ扱い（再取得可能なのでGitに載せない）
+data/raw/
+
+# レポートHTMLは生成物
+reports/**/*.html
