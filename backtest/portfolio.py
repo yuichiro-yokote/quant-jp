@@ -24,8 +24,12 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-LOT = 100          # 単元株。日本株は原則100株単位
-COMMISSION = 0.0005  # 片道0.05%
+# 売買単位。**1 = 単元未満株（SBI証券のS株など）を使う前提**。
+# 資金10万円では単元株(100株)だと36%の銘柄しか買えず、しかも小型・低流動性に偏るため
+# 分散が成立しない。S株なら5銘柄でも遊休現金5.5%で回る（CRITERIA.md 前提条件を参照）。
+# 単元株しか使えない口座を想定して検証したいときだけ lot=100 を渡す。
+LOT = 1
+COMMISSION = 0.0005  # 片道0.05%。S株は手数料無料だがスリッページの代理として残す
 
 
 @dataclass
@@ -163,7 +167,8 @@ def run(
                 target = {}
                 for s in wanted:
                     q = budget / (float(px[s]) * (1 + commission))
-                    target[s] = np.floor(q / lot) * lot if lot > 1 else q
+                    # lot=1 でも必ず切り捨てる。S株は1株単位であって小数株ではない。
+                    target[s] = np.floor(q / lot) * lot
 
                 # 3) **売りを先に全部処理してから買う。**
                 #    買いと売りを交互に処理すると現金が尽きて買えない銘柄が出る。
@@ -182,9 +187,7 @@ def run(
                     #   浮動小数の最下位ビットで買う/買わないが反転し、
                     #   同じ戦略のリターンが 160ポイント動いた（2026-08-15 実測）。
                     unit = float(px[s]) * (1 + commission)
-                    qty = min(target[s] - held, balance / unit)
-                    if lot > 1:
-                        qty = np.floor(qty / lot) * lot
+                    qty = np.floor(min(target[s] - held, balance / unit) / lot) * lot
                     if qty > 0:
                         balance -= book.buy(s, qty, float(px[s]), d)
                         orders += 1
