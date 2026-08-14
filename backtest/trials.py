@@ -76,9 +76,17 @@ def record(
     commission: float,
     metrics: dict,
     note: str = "",
+    universe: str = "yfinance/生存銘柄のみ",
 ) -> int:
-    """1試行を追記し、その試行番号を返す。"""
+    """1試行を追記し、その試行番号を返す。
+
+    universe: どのユニバースで検証したか。1行ごとに残す。
+        既定の "yfinance/生存銘柄のみ" は**サバイバーシップバイアスあり**を意味する。
+        後から「この結果はどのデータで出したのか」を辿れないと、
+        バイアスの有無が混ざった記録になり、全部が信用できなくなる。
+    """
     trial_id = next_trial_id()
+    note = f"[{universe}] {note}".strip()
     row = {
         "trial_id": trial_id,
         "timestamp": datetime.now().isoformat(timespec="seconds"),

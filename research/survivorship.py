@@ -34,8 +34,13 @@ OUT = Path(__file__).resolve().parent / "survivorship_result.csv"
 
 # Freeプランのカバー範囲内（実測: 2024-05-22 〜 2026-05-22）
 MONTHS = pd.date_range("2024-06-01", "2026-05-01", freq="MS")
-SLEEP = 12          # レート制限が厳しいので長めに空ける
-MAX_RETRY = 3
+
+# J-Quants Free は「秒あたり」ではなく**クォータ**で制限しているらしい。
+# 実測: 10〜15リクエストで締め出され、その後数分〜十数分は何を投げても弾かれる。
+# 土日祝かどうかに関係なく失敗するので、失敗＝レート制限とみなして気長に待つ。
+SLEEP = 45
+MAX_RETRY = 6
+BACKOFF = 90        # 失敗時の待ち（回を追うごとに伸ばす）
 
 INVESTABLE_MKT = ["プライム", "スタンダード", "グロース"]
 
@@ -49,14 +54,15 @@ def fetch_snapshot(cli, day: pd.Timestamp) -> pd.DataFrame | None:
 
     for attempt in range(MAX_RETRY):
         try:
-            df = cli.get_eq_bars_daily(date=f"{day:%Y%m%d}")
+            # 引数名は date ではなく date_yyyymmdd（date= を渡すと TypeError になる）
+            df = cli.get_eq_bars_daily(date_yyyymmdd=f"{day:%Y%m%d}")
             if df is not None and len(df):
                 df.to_csv(path, index=False)
                 return df
-            return None  # 休場日
+            return None  # 休場日（データはあるが0行）
         except Exception as e:
-            wait = SLEEP * (attempt + 2)
-            print(f"    {day:%Y-%m-%d} 失敗({type(e).__name__}) {wait}秒待って再試行")
+            wait = BACKOFF * (attempt + 1)
+            print(f"    {day:%Y-%m-%d} 失敗({type(e).__name__}) {wait}秒待つ", flush=True)
             time.sleep(wait)
     return None
 
@@ -68,16 +74,15 @@ def main() -> None:
     snaps: dict[str, pd.DataFrame] = {}
     for m in MONTHS:
         got = None
-        for offset in range(6):  # 休場日なら数日ずらして探す
-            day = m + pd.Timedelta(days=offset)
+        # 平日だけを候補にする（土日を叩くとクォータの無駄）
+        for day in pd.bdate_range(m, m + pd.Timedelta(days=9))[:4]:
             got = fetch_snapshot(cli, day)
             if got is not None and len(got):
                 snaps[f"{day:%Y-%m-%d}"] = got
-                print(f"  {day:%Y-%m-%d}: {len(got)} 銘柄")
+                print(f"  {day:%Y-%m-%d}: {len(got)} 銘柄", flush=True)
                 break
-            time.sleep(2)
         if got is None:
-            print(f"  {m:%Y-%m}: 取得できず")
+            print(f"  {m:%Y-%m}: 取得できず", flush=True)
         time.sleep(SLEEP)
 
     if len(snaps) < 4:
