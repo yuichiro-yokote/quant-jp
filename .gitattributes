@@ -1,0 +1,8 @@
+# リポジトリ内はLFで統一する。
+# Windows / 別PC / GitHub Actions(Linux) をまたぐため、揃えないと差分が汚れる。
+* text=auto eol=lf
+
+# 記録系はマージ時に競合させず、追記の衝突を検知したいのでテキスト扱いを明示
+*.md text eol=lf
+*.py text eol=lf
+*.csv text eol=lf
