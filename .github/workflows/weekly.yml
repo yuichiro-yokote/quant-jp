@@ -1,0 +1,61 @@
+# 週次レビューを Issue にして届ける。
+# ログに出すだけだと見に行かないので、通知が飛ぶ形にする。
+# 1年間の検証で一番壊れやすいのは仕組みではなく「見続けること」なので。
+name: 週次レビュー
+
+on:
+  schedule:
+    # 07:23 UTC 土曜 = 16:23 JST 土曜。週が終わってから落ち着いて読む想定。
+    # 毎正時を避けるのは daily.yml と同じ理由（キューのジョブが破棄されうる）。
+    - cron: "23 7 * * 6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: 依存関係
+        run: pip install -r requirements.txt
+
+      - name: レビューを作る
+        id: review
+        run: |
+          python paper/review.py 2>/dev/null | tee /tmp/review.txt
+          # 対応が要るかどうかを件名に出す。件名だけで判断できるように。
+          if grep -q "^  NG\|^  - \*\*" /tmp/review.txt; then
+            echo "flag=要対応" >> "$GITHUB_OUTPUT"
+          else
+            echo "flag=異常なし" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Issue にして通知する
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo '```'
+            cat /tmp/review.txt
+            echo '```'
+            echo
+            echo "この Issue は自動生成。**読んだら閉じるだけでよい。**"
+            echo "「今週やること」が空なら、何もしないのが正解です。"
+          } > /tmp/body.md
+          gh issue create \
+            --title "週次レビュー $(date -u -d '9 hours' +%Y-%m-%d) — ${{ steps.review.outputs.flag }}" \
+            --body-file /tmp/body.md \
+            --label "" || gh issue create \
+            --title "週次レビュー $(date -u -d '9 hours' +%Y-%m-%d) — ${{ steps.review.outputs.flag }}" \
+            --body-file /tmp/body.md

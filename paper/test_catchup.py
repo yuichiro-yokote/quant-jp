@@ -118,6 +118,29 @@ def main() -> None:
         print(f"5. 改ざん検出        : OK  1円の書き換えを検出（{len(problems)} 件の不整合）")
         print(f"     {problems[0]}")
 
+        # --- 6. A4: フォワードとバックテストの2実装が一致するか ---
+        # 合格基準A4そのもの。`run_daily.execute` と `portfolio.run` は別々に
+        # 書いた実装で、共有しているのは allocate だけ。ここが合わなくなったら
+        # 以後のバックテスト結果は一切信用できない。
+        os.environ["QUANTJP_JOURNAL_DIR"] = str(b_dir)
+        for m in ["journal", "run_daily", "review"]:
+            sys.modules.pop(m, None)
+        import review as R
+        import journal as J2
+        entries = [J2.read(x) for x in J2.dates()]
+        res = R.replay_through_backtester(entries)
+        if res is None:
+            print("6. A4                : 判定できず（売買が発生していない期間）")
+        else:
+            bt, fwd = res
+            gap = abs(bt - fwd) / max(fwd, 1) * 100
+            if gap >= 0.5:
+                print(f"6. NG: A4 の乖離が大きい バックテスト {bt:,.2f} / 記録 {fwd:,.2f} "
+                      f"({gap:.4f}%)")
+                sys.exit(1)
+            print(f"6. A4 の一致         : OK  バックテスト {bt:,.2f}円 / 記録 {fwd:,.2f}円 "
+                  f"（乖離 {gap:.4f}%）")
+
         print()
         print("すべて通過。GitHub Actions が1日飛ばしても、翌日の実行が穴を埋める。")
     finally:
