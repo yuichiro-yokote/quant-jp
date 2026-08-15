@@ -11,3 +11,6 @@ data/raw/
 
 # レポートHTMLは生成物
 reports/**/*.html
+
+# 価格パネルのキャッシュ（再取得可能）
+data/raw/panels/

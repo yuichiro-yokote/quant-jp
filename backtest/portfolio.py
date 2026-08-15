@@ -78,6 +78,62 @@ class Result:
         return (self.equity.iloc[-1] - best - start) / start * 100
 
 
+def allocate(
+    prices: dict[str, float],
+    total: float,
+    *,
+    lot: int = LOT,
+    commission: float = COMMISSION,
+    max_weight_mult: float = 1.5,
+) -> dict[str, float]:
+    """予算 total を等ウェイトに**最も近い整数株数**へ割り振る。
+
+    株は整数株でしか買えないので、等金額はまず実現できない。端数の扱い方で
+    結果が大きく変わるため、方式を明示して固定しておく（実測 2026-08-15）:
+
+    | 端数の処理 | 遊休現金 | 最大ウェイト | 判定 |
+    |---|---|---|---|
+    | 切り捨てるだけ | 14.7% | 11.6% | 資金の15%が働かない |
+    | 余りを**一番安い**銘柄へ | ~0% | **35〜80%** | ただの集中投資。却下 |
+    | 余りを**目標に最も足りない**銘柄へ | **0.5%** | 12.6% | **これを採用** |
+
+    （資金10万円・10銘柄・流動性上位500銘柄で3,000回試行。目標ウェイトは10%）
+
+    最後の方式だけが、現金を使い切りながら等ウェイトを保てる。
+    バックテストとフォワードテストで**同じ関数を使う**こと。ここがずれると
+    合格基準A4（シミュレータと実記録の乖離）が説明不能になる。
+    """
+    n = len(prices)
+    if n == 0:
+        return {}
+    budget = total / n
+    unit = {s: p * (1 + commission) for s, p in prices.items()}
+    target = {s: np.floor(budget / u / lot) * lot for s, u in unit.items()}
+    free = total - sum(target[s] * unit[s] for s in prices)
+
+    # 目標金額に最も足りていない銘柄へ、買える限り1単元ずつ足す。
+    # ただし1銘柄が目標の max_weight_mult 倍を超えないよう歯止めをかける。
+    # これが無いと、1株が予算を超える高額株に1株だけ入って、その1銘柄で
+    # 資産の15〜40%を占める集中投資になる（2026-08-15 に実際に発生）。
+    cap = budget * max_weight_mult
+    for _ in range(n * 100):  # 念のための上限。通常は数回で抜ける
+        best, best_short = None, 0.0
+        for s in prices:
+            if unit[s] * lot > free:
+                continue
+            if (target[s] + lot) * unit[s] > cap:
+                continue
+            short = budget - target[s] * unit[s]
+            if short > best_short:
+                best, best_short = s, short
+        if best is None:
+            break
+        target[best] += lot
+        free -= unit[best] * lot
+
+    return target
+
+
 class _Book:
     """保有株数と平均取得単価を持つだけの帳簿。売った時点で損益を確定する。"""
 
@@ -161,14 +217,12 @@ def run(
                     orders += 1
 
             if wanted:
-                # 2) 目標株数を決める。等ウェイト、単元株に切り捨て
+                # 2) 目標株数を決める
                 total = balance + sum(book.shares.get(s, 0.0) * float(px[s]) for s in wanted)
-                budget = total / len(wanted)
-                target = {}
-                for s in wanted:
-                    q = budget / (float(px[s]) * (1 + commission))
-                    # lot=1 でも必ず切り捨てる。S株は1株単位であって小数株ではない。
-                    target[s] = np.floor(q / lot) * lot
+                target = allocate(
+                    {s: float(px[s]) for s in wanted},
+                    total, lot=lot, commission=commission,
+                )
 
                 # 3) **売りを先に全部処理してから買う。**
                 #    買いと売りを交互に処理すると現金が尽きて買えない銘柄が出る。

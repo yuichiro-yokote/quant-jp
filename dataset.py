@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from datetime import datetime, timedelta
@@ -319,6 +320,91 @@ def load_bars(
     _validate(df, symbol)
     _check_bad_dividends_in_window(symbol, df)
     return df
+
+
+PANEL_DIR = CACHE_DIR / "panels"
+PANEL_MAX_AGE = timedelta(hours=6)
+
+
+def load_panel(
+    symbols: list[str],
+    *,
+    start: str = "2015-01-01",
+    refresh: bool = False,
+    batch: int = 100,
+) -> dict[str, pd.DataFrame]:
+    """複数銘柄の日足をまとめて取り、{"Open": df, "Close": df, ...} で返す。
+
+    各 df は index=日付 / columns=銘柄。フォワードテストは毎日500銘柄を見るので、
+    `load_bars` を1銘柄ずつ呼ぶと取得だけで数分かかり、失敗する確率もそのぶん上がる。
+    合格基準A1（欠測≤5営業日）を守るには、取得の回数そのものを減らす必要がある。
+
+    `load_bars` と違い、**個別銘柄の品質検証はしない**。500銘柄のうち1つが
+    壊れているだけで当日の実行が止まると、それこそA1に響くため。
+    代わりに壊れた銘柄はその日の候補から外し、理由を返り値の "excluded" に載せる。
+    """
+    PANEL_DIR.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(",".join(sorted(symbols)).encode()).hexdigest()[:16]
+    path = PANEL_DIR / f"{key}.csv"
+
+    fresh = (
+        not refresh
+        and path.exists()
+        and datetime.now() - datetime.fromtimestamp(path.stat().st_mtime) < PANEL_MAX_AGE
+    )
+    if fresh:
+        long = pd.read_csv(path, parse_dates=["Date"])
+    else:
+        frames = []
+        for i in range(0, len(symbols), batch):
+            chunk = symbols[i:i + batch]
+            raw = yf.download(chunk, start=start, auto_adjust=True, progress=False,
+                              group_by="column", threads=True)
+            if raw.empty:
+                continue
+            parts = []
+            for f in OHLCV:
+                if f not in raw:
+                    continue
+                s = raw[f]
+                if isinstance(s, pd.Series):      # 1銘柄だけのとき
+                    s = s.to_frame(chunk[0])
+                parts.append(s.stack().rename(f))
+            if parts:
+                frames.append(pd.concat(parts, axis=1))
+        if not frames:
+            raise DataQualityError("load_panel: 1銘柄も取得できなかった")
+        long = pd.concat(frames).reset_index()
+        long.columns = ["Date", "Symbol"] + OHLCV
+        d = pd.to_datetime(long["Date"], utc=True).dt.tz_localize(None).dt.normalize()
+        long["Date"] = d
+        long = long.dropna(subset=["Close"])
+        long.to_csv(path, index=False)
+
+        got = set(long["Symbol"])
+        missing = sorted(set(symbols) - got)
+        if missing:
+            # 上場廃止（日本ではTOB・MBOが主）で消える銘柄は必ず出る。
+            # 実測で年約3%。**止めずに記録して先へ進む**（A1: 欠測≤5営業日）。
+            print(f"[dataset] 株価が取れなかった銘柄 {len(missing)}/{len(symbols)} 件"
+                  f"（上場廃止の可能性）: {' '.join(missing[:10])}"
+                  f"{' …' if len(missing) > 10 else ''}")
+
+    out = {f: long.pivot(index="Date", columns="Symbol", values=f).sort_index() for f in OHLCV}
+    return out
+
+
+def settled_dates(panel: dict[str, pd.DataFrame], min_coverage: float = 0.8) -> pd.DatetimeIndex:
+    """「その日のバーが確定している」と見なせる日付だけを返す。
+
+    yfinance は当日のバーを、出来高だけ入れて OHLC を NaN のまま先に配信することがある
+    （実例: 7203.T 2026-08-14。しかも前日には値が入って見えていた）。
+    未確定の日で判断すると、翌日に値が変わって記録と食い違う。
+    **確定していない日は今日は飛ばし、翌日に処理する。** これが取りこぼしを防ぐ要。
+    """
+    close = panel["Close"]
+    coverage = close.notna().sum(axis=1) / close.shape[1]
+    return close.index[coverage >= min_coverage]
 
 
 def buy_and_hold_return(symbol: str, start: str, end: str, *, refresh: bool = False) -> float:
