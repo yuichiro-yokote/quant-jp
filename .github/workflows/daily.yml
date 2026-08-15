@@ -1,0 +1,62 @@
+# このワークフローの設計意図は README「日次実行の設計」を参照。
+name: 日次フォワードテスト
+
+on:
+  schedule:
+    # 10:17 UTC = 19:17 JST。東証の大引け(15:30 JST)から3時間半後で、
+    # S株の注文受付(〜24:00 JST、翌営業日の前場始値で約定)にも間に合う。
+    #
+    # **毎正時を避けているのは意図的。** GitHub公式ドキュメントに
+    # 「負荷が高い時間帯(毎正時が特に混む)はキューのジョブが破棄されることがある」
+    # と明記されているため。それでも落ちる前提で、run_daily.py 側が
+    # 「未処理の営業日を全部処理する」作りになっている。
+    - cron: "17 10 * * 1-5"
+  workflow_dispatch:        # 手動でも回せるようにしておく（復旧用）
+
+permissions:
+  contents: write           # journal を push するために必要
+
+concurrency:
+  group: daily-forward-test
+  cancel-in-progress: false # 実行中に次が来ても、割り込まず待たせる
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: 依存関係
+        run: pip install -r requirements.txt
+
+      - name: ジャーナルの改ざん検査
+        # 追記する前に確認する。壊れた記録の上に積むと被害が広がる。
+        run: python paper/run_daily.py --verify
+
+      - name: 日次実行（未処理の営業日をすべて処理）
+        run: python paper/run_daily.py
+
+      - name: 現状
+        if: always()
+        run: python paper/run_daily.py --status
+
+      - name: 記録をコミット
+        run: |
+          if [ -z "$(git status --porcelain paper/journal)" ]; then
+            echo "記録に変化なし（休場日か、既に処理済み）。コミットしない。"
+            exit 0
+          fi
+          git config user.name  "yuichiro-yokote"
+          git config user.email "yuichiro-yokote@users.noreply.github.com"
+          git add paper/journal
+          git commit -m "記録: $(date -u -d '9 hours' +%Y-%m-%d) の日次フォワードテスト"
+          # 手元から push した直後などに備えて、rebase してから送る
+          git pull --rebase --autostash origin main
+          git push origin HEAD:main

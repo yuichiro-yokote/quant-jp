@@ -43,6 +43,12 @@ CASH = 100_000        # CRITERIA.md 前提条件
 COMMISSION = 0.0005   # 片道0.05%。S株は手数料無料だがスリッページの代理
 LOT = 1               # 単元未満株（S株）を前提とする
 MAX_CATCHUP = 30      # 一度に処理する営業日の上限。これを超えたら異常として止める
+HEARTBEAT_WARN = 5    # 合格基準A1。最後の記録からこれ以上空いたら警告する
+
+# 株価を取りに行く期間。モメンタムの計算に必要なのは 252+21 営業日 ≈ 13ヶ月なので、
+# 余裕を見て2年で足りる。ここを「全期間」にすると毎日11年ぶん×500銘柄を
+# ダウンロードすることになり、クラウド実行が遅く・不安定になる（＝A1に響く）。
+PANEL_YEARS = 2
 
 
 def load_universe() -> list[str]:
@@ -122,7 +128,10 @@ def process_day(day: pd.Timestamp, panel: dict, symbols: list[str], *, dry: bool
     # 2) この日の終値でシグナルを計算する（執行は翌営業日）
     close = panel["Close"]
     dates_upto = close.index[close.index <= day]
-    rebalance = momentum.is_rebalance_day(dates_upto, day)
+    # 月初の営業日にリバランスする。ただし**初日だけは例外**で、必ず建てる。
+    # 月の途中から始めた場合に、次の月初まで数週間も現金のまま待つのは
+    # 現実の運用と違うし、その間は執行まわりのバグも見つからない。
+    rebalance = prev is None or momentum.is_rebalance_day(dates_upto, day)
     if rebalance:
         # いま買える価格帯の銘柄だけを候補にする。
         # 1株が1銘柄あたり予算を超える銘柄は、目標ウェイトでは持てない。
@@ -209,9 +218,17 @@ def main() -> None:
         sys.exit(1)
 
     symbols = load_universe()
-    panel = load_panel(symbols, refresh=args.refresh)
+    panel_start = (pd.Timestamp.today() - pd.DateOffset(years=PANEL_YEARS)).date().isoformat()
+    panel = load_panel(symbols, start=panel_start, refresh=args.refresh)
     settled = settled_dates(panel)
     done = set(journal.dates())
+
+    # 合格基準A1（欠測≤5営業日）の見張り。黙って止まっているのが一番怖い。
+    if done:
+        gap = len([d for d in settled if d > pd.Timestamp(max(done))])
+        if gap > HEARTBEAT_WARN:
+            print(f"::warning::最後の記録から {gap} 営業日空いている"
+                  f"（合格基準A1の上限は {HEARTBEAT_WARN} 営業日）。原因を確認すること。")
 
     started = journal.dates()
     if started:
