@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -28,6 +29,15 @@ CACHE_DIR = REPO_ROOT / "data" / "raw"
 CACHE_MAX_AGE = timedelta(hours=12)
 
 OHLCV = ["Open", "High", "Low", "Close", "Volume"]
+
+
+def _log(msg: str) -> None:
+    """診断メッセージは stderr に出す。
+
+    週次レビュー等の出力に混ざると本文が読みにくくなる。
+    データの異常を知らせること自体は重要なので、消さずに経路を分ける。
+    """
+    print(msg, file=sys.stderr)
 
 
 class DataQualityError(Exception):
@@ -101,7 +111,7 @@ def _validate(df: pd.DataFrame, symbol: str) -> None:
     # 「約定したことになっている取引が現実には不可能」という罠なので数だけ出す。
     zero_vol = int((df["Volume"] <= 0).sum())
     if zero_vol:
-        print(f"[dataset] {symbol}: 出来高0の日が {zero_vol} 件（約定不能日。結果を読む際に留意）")
+        _log(f"[dataset] {symbol}: 出来高0の日が {zero_vol} 件（約定不能日。結果を読む際に留意）")
 
 
 CORRECTIONS_CSV = REPO_ROOT / "data" / "corrections.csv"
@@ -134,8 +144,8 @@ def _apply_corrections(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
             continue
         df.loc[mask, ["Open", "High", "Low", "Close"]] *= float(r["price_factor"])
         df.loc[mask, "Volume"] *= float(r["volume_factor"])
-        print(f"[dataset] {symbol}: 既知の破損を補正 {r['start']}〜{r['end']} ({n}行, "
-              f"価格x{r['price_factor']}) 根拠: {r['verified_against']}")
+        _log(f"[dataset] {symbol}: 既知の破損を補正 {r['start']}〜{r['end']} ({n}行, "
+             f"価格x{r['price_factor']}) 根拠: {r['verified_against']}")
     return df
 
 
@@ -163,8 +173,8 @@ def _drop_unsettled_tail(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
 
     if n_tail:
         dropped = df.index[-n_tail:]
-        print(f"[dataset] {symbol}: 未確定の末尾 {n_tail} 行を除外 "
-              f"({dropped[0].date()} 〜 {dropped[-1].date()})")
+        _log(f"[dataset] {symbol}: 未確定の末尾 {n_tail} 行を除外 "
+             f"({dropped[0].date()} 〜 {dropped[-1].date()})")
         df = df.iloc[:-n_tail]
     return df
 
@@ -210,13 +220,13 @@ def _scan_bad_dividends(symbol: str, adjusted: pd.DataFrame) -> list[str]:
     for d, r in suspect.iterrows():
         jump = float(step.get(d, 0.0) or 0.0)
         if abs(jump) > 0.05:
-            print(f"[dataset] {symbol}: 配当の調整が壊れている {d.date()} "
-                  f"(配当 {r['div']:.2f}円/株価 {r['Close']:.1f}円={r['div'] / r['Close'] * 100:.1f}%, "
+            _log(f"[dataset] {symbol}: 配当の調整が壊れている {d.date()} "
+                 f"(配当 {r['div']:.2f}円/株価 {r['Close']:.1f}円={r['div'] / r['Close'] * 100:.1f}%, "
                   f"調整後価格の段差 {jump * 100:+.1f}%)")
             bad.append(str(d.date()))
         else:
-            print(f"[dataset] {symbol}: {d.date()} の配当は額が不自然だが、"
-                  f"調整後の価格に段差なし({jump * 100:+.1f}%)。repairで補正済みとみなす")
+            _log(f"[dataset] {symbol}: {d.date()} の配当は額が不自然だが、"
+                 f"調整後の価格に段差なし({jump * 100:+.1f}%)。repairで補正済みとみなす")
     return bad
 
 
@@ -241,7 +251,7 @@ def _fetch(symbol: str) -> pd.DataFrame:
     df.index.name = "Date"
     n_repaired = int(df["Repaired?"].sum()) if "Repaired?" in df.columns else 0
     if n_repaired:
-        print(f"[dataset] {symbol}: yfinanceのrepairが {n_repaired} 行を補正")
+        _log(f"[dataset] {symbol}: yfinanceのrepairが {n_repaired} 行を補正")
     df = df[OHLCV].copy()
 
     # 配当の調整漏れはキャッシュに残らないので、取得時に調べて脇に書き出しておく
@@ -386,8 +396,8 @@ def load_panel(
         if missing:
             # 上場廃止（日本ではTOB・MBOが主）で消える銘柄は必ず出る。
             # 実測で年約3%。**止めずに記録して先へ進む**（A1: 欠測≤5営業日）。
-            print(f"[dataset] 株価が取れなかった銘柄 {len(missing)}/{len(symbols)} 件"
-                  f"（上場廃止の可能性）: {' '.join(missing[:10])}"
+            _log(f"[dataset] 株価が取れなかった銘柄 {len(missing)}/{len(symbols)} 件"
+                 f"（上場廃止の可能性）: {' '.join(missing[:10])}"
                   f"{' …' if len(missing) > 10 else ''}")
 
     out = {f: long.pivot(index="Date", columns="Symbol", values=f).sort_index() for f in OHLCV}
