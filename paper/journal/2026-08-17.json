@@ -1,0 +1,106 @@
+{
+  "date": "2026-08-17",
+  "generated_at": "2026-08-17T10:49:55+00:00",
+  "git_commit": "3042b0d",
+  "prev_hash": "301ac2bce4c2845a10d3347edab74d91bd980f1401d963238ae04885209fd84f",
+  "universe": {
+    "n": 500,
+    "file": "universe.csv",
+    "n_priced": 486
+  },
+  "fills": [
+    {
+      "symbol": "3110.T",
+      "side": "buy",
+      "shares": 3,
+      "price": 3270.0
+    },
+    {
+      "symbol": "3436.T",
+      "side": "buy",
+      "shares": 3,
+      "price": 3986.0
+    },
+    {
+      "symbol": "5333.T",
+      "side": "buy",
+      "shares": 2,
+      "price": 6025.0
+    },
+    {
+      "symbol": "5801.T",
+      "side": "buy",
+      "shares": 2,
+      "price": 4170.0
+    },
+    {
+      "symbol": "5802.T",
+      "side": "buy",
+      "shares": 4,
+      "price": 2384.0
+    },
+    {
+      "symbol": "5803.T",
+      "side": "buy",
+      "shares": 2,
+      "price": 5750.0
+    },
+    {
+      "symbol": "6525.T",
+      "side": "buy",
+      "shares": 1,
+      "price": 9288.0
+    },
+    {
+      "symbol": "6855.T",
+      "side": "buy",
+      "shares": 1,
+      "price": 6990.0
+    },
+    {
+      "symbol": "6963.T",
+      "side": "buy",
+      "shares": 2,
+      "price": 5081.0
+    },
+    {
+      "symbol": "6981.T",
+      "side": "buy",
+      "shares": 1,
+      "price": 8240.0
+    }
+  ],
+  "positions": {
+    "3110.T": 3.0,
+    "3436.T": 3.0,
+    "5333.T": 2.0,
+    "5801.T": 2.0,
+    "5802.T": 4.0,
+    "5803.T": 2.0,
+    "6525.T": 1.0,
+    "6855.T": 1.0,
+    "6963.T": 2.0,
+    "6981.T": 1.0
+  },
+  "cash": 2077.06,
+  "equity": 103130.06,
+  "signal": {
+    "as_of_close": "2026-08-17",
+    "rebalance": false,
+    "strategy": "momentum_12_1",
+    "targets": [
+      "3110.T",
+      "3436.T",
+      "5333.T",
+      "5801.T",
+      "5802.T",
+      "5803.T",
+      "6525.T",
+      "6855.T",
+      "6963.T",
+      "6981.T"
+    ]
+  },
+  "notes": [],
+  "hash": "dcb5827b5a96a9f69a7f0f1f661b6ca8dd5e28581110d6c2c94db0b0cb871b45"
+}
