@@ -1,0 +1,94 @@
+{
+  "date": "2026-09-02",
+  "generated_at": "2026-09-02T14:30:14+00:00",
+  "git_commit": "f3019b5",
+  "prev_hash": "2b074d255773a4aaa948e330cdce645352d1d9a79fb63f2005b388b1c93d8fdb",
+  "universe": {
+    "n": 500,
+    "file": "universe.csv",
+    "n_priced": 486
+  },
+  "fills": [
+    {
+      "symbol": "3110.T",
+      "side": "sell",
+      "shares": 3.0,
+      "price": 3090.0
+    },
+    {
+      "symbol": "6525.T",
+      "side": "sell",
+      "shares": 1.0,
+      "price": 8425.0
+    },
+    {
+      "symbol": "6963.T",
+      "side": "sell",
+      "shares": 2.0,
+      "price": 4764.0
+    },
+    {
+      "symbol": "3436.T",
+      "side": "sell",
+      "shares": 1.0,
+      "price": 3177.0
+    },
+    {
+      "symbol": "6740.T",
+      "side": "buy",
+      "shares": 186,
+      "price": 48.0
+    },
+    {
+      "symbol": "6752.T",
+      "side": "buy",
+      "shares": 2,
+      "price": 4319.0
+    },
+    {
+      "symbol": "6855.T",
+      "side": "buy",
+      "shares": 1,
+      "price": 6080.0
+    },
+    {
+      "symbol": "7762.T",
+      "side": "buy",
+      "shares": 3,
+      "price": 2743.0
+    }
+  ],
+  "positions": {
+    "3436.T": 2.0,
+    "5333.T": 2.0,
+    "5801.T": 2.0,
+    "5802.T": 4.0,
+    "5803.T": 2.0,
+    "6740.T": 186.0,
+    "6752.T": 2.0,
+    "6855.T": 2.0,
+    "6981.T": 1.0,
+    "7762.T": 3.0
+  },
+  "cash": 570.92,
+  "equity": 87740.92,
+  "signal": {
+    "as_of_close": "2026-09-02",
+    "rebalance": false,
+    "strategy": "momentum_12_1",
+    "targets": [
+      "3436.T",
+      "5333.T",
+      "5801.T",
+      "5802.T",
+      "5803.T",
+      "6740.T",
+      "6752.T",
+      "6855.T",
+      "6981.T",
+      "7762.T"
+    ]
+  },
+  "notes": [],
+  "hash": "63819ec6e9e3c46df61e47b31f5b973341f0fc231ae3024778eeab55fdba2b48"
+}
