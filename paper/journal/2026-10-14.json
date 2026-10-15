@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-14",
+  "generated_at": "2026-10-15T15:01:25+00:00",
+  "git_commit": "d1e3ef6",
+  "prev_hash": "cefed819b8f5e9cbf7f0d56c2b509b38bd76743736eca194bc8344752aa17dfa",
+  "universe": {
+    "n": 500,
+    "file": "universe.csv",
+    "n_priced": 486
+  },
+  "fills": [],
+  "positions": {
+    "3110.T": 3.0,
+    "3436.T": 3.0,
+    "5706.T": 4.0,
+    "5801.T": 2.0,
+    "5803.T": 2.0,
+    "6740.T": 199.0,
+    "6752.T": 2.0,
+    "6855.T": 1.0,
+    "6981.T": 1.0,
+    "7762.T": 4.0
+  },
+  "cash": 2733.31,
+  "equity": 91022.31,
+  "signal": {
+    "as_of_close": "2026-10-14",
+    "rebalance": false,
+    "strategy": "momentum_12_1",
+    "targets": [
+      "3110.T",
+      "3436.T",
+      "5706.T",
+      "5801.T",
+      "5803.T",
+      "6740.T",
+      "6752.T",
+      "6855.T",
+      "6981.T",
+      "7762.T"
+    ]
+  },
+  "notes": [],
+  "hash": "72187259f2fcffdf88994b11347bc093da2f639759107f00ec8e627ffd59dcb0"
+}
