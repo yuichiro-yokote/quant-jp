@@ -1,0 +1,112 @@
+{
+  "date": "2026-11-04",
+  "generated_at": "2026-11-05T18:00:57+00:00",
+  "git_commit": "cd331c5",
+  "prev_hash": "c3b44102de521ba5933732c084302e7ac368003475f69753cc92e1367777db12",
+  "universe": {
+    "n": 500,
+    "file": "universe.csv",
+    "n_priced": 486
+  },
+  "fills": [
+    {
+      "symbol": "3110.T",
+      "side": "sell",
+      "shares": 3.0,
+      "price": 2849.0
+    },
+    {
+      "symbol": "3436.T",
+      "side": "sell",
+      "shares": 3.0,
+      "price": 2293.5
+    },
+    {
+      "symbol": "5803.T",
+      "side": "sell",
+      "shares": 2.0,
+      "price": 3903.0
+    },
+    {
+      "symbol": "6740.T",
+      "side": "sell",
+      "shares": 199.0,
+      "price": 27.0
+    },
+    {
+      "symbol": "5706.T",
+      "side": "sell",
+      "shares": 1.0,
+      "price": 1956.5
+    },
+    {
+      "symbol": "7762.T",
+      "side": "sell",
+      "shares": 1.0,
+      "price": 2165.0
+    },
+    {
+      "symbol": "5801.T",
+      "side": "buy",
+      "shares": 1,
+      "price": 2746.0
+    },
+    {
+      "symbol": "6324.T",
+      "side": "buy",
+      "shares": 2,
+      "price": 5114.0
+    },
+    {
+      "symbol": "6525.T",
+      "side": "buy",
+      "shares": 1,
+      "price": 6678.0
+    },
+    {
+      "symbol": "6993.T",
+      "side": "buy",
+      "shares": 98,
+      "price": 75.0
+    },
+    {
+      "symbol": "8377.T",
+      "side": "buy",
+      "shares": 10,
+      "price": 757.0
+    }
+  ],
+  "positions": {
+    "5706.T": 3.0,
+    "5801.T": 3.0,
+    "6324.T": 2.0,
+    "6525.T": 1.0,
+    "6752.T": 2.0,
+    "6855.T": 1.0,
+    "6981.T": 1.0,
+    "6993.T": 98.0,
+    "7762.T": 3.0,
+    "8377.T": 10.0
+  },
+  "cash": 855.66,
+  "equity": 70672.16,
+  "signal": {
+    "as_of_close": "2026-11-04",
+    "rebalance": false,
+    "strategy": "momentum_12_1",
+    "targets": [
+      "5706.T",
+      "5801.T",
+      "6324.T",
+      "6525.T",
+      "6752.T",
+      "6855.T",
+      "6981.T",
+      "6993.T",
+      "7762.T",
+      "8377.T"
+    ]
+  },
+  "notes": [],
+  "hash": "2ac1ce6d7a313b31e5d48866dee006ba3b4bfd886e961225bb4f2114ffa43d75"
+}
